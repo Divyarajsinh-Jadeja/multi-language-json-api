@@ -4,8 +4,7 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "dev": "nodemon index.js",
-    "postinstall": "sudo npm install -g https://github.com/parvineyvazov/json-translator-cli"
+  "postinstall": "bash install-jsontt.sh"
   },
   "keywords": [],
   "author": "",
