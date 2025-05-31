@@ -6,7 +6,7 @@ const fs = require("fs");
 const path = require("path");
 const { v4: uuidv4 } = require("uuid");
 
-const app = express();
+const app = express();  
 const port = 3000;
 
 app.use(bodyParser.json());
@@ -18,7 +18,7 @@ app.post("/translate-multiple", async (req, res) => {
     return res.status(400).json({ error: "Provide 'data' and 'toLanguages' array (ISO codes)." });
   }
 
-  const id = uuidv4();
+  const id = uuidv4(); // unique ID for this request
   const tempDir = path.join("/tmp", `translate-${id}`);
   fs.mkdirSync(tempDir);
 
@@ -26,83 +26,40 @@ app.post("/translate-multiple", async (req, res) => {
     const inputFilePath = path.join(tempDir, "input.json");
     fs.writeFileSync(inputFilePath, JSON.stringify(data, null, 2));
 
-    const from = req.body.from || "auto";
-    const name = `myApp-${id}`;
-    const concurrencyLimit = req.body.concurrencylimit || 3;
-    const maxRetries = 4;
-    const translationModules = ["google2", "libre", "bing", "yandex"]; // Free models
+    const from = req.body.from || 'auto';
+    const name = `myApp-${id}`; // unique name for output files
+    const concurrencylimit = req.body.concurrencylimit || 3;
+    const command = `cd ${tempDir} && jsontt input.json --module google2 -f ${from} --to ${toLanguages.join(' ')} --name ${name} --fallback no --concurrencylimit ${concurrencylimit}`;
 
-    const result = {};
+    exec(command, (error, stdout, stderr) => {
+      if (error) {
+        console.error(`❌ exec error: ${error}`);
+        return res.status(500).json({ error: "Command execution failed", details: error.message });
+      }
 
-    // Process translations for each language
-    for (const lang of toLanguages) {
-      let translated = false;
-      let retryCount = 0;
-      let currentModule = 0;
-
-      while (!translated && retryCount < maxRetries) {
-        const module = translationModules[currentModule];
+      const result = {};
+      toLanguages.forEach((lang) => {
         const outputPath = path.join(tempDir, `${name}.${lang}.json`);
-        const command = `cd ${tempDir} && jsontt input.json --module ${module} -f ${from} --to ${lang} --name ${name} --fallback no --concurrencylimit ${concurrencyLimit}`;
-
-        try {
-          // Execute translation command synchronously for simplicity
-          await new Promise((resolve, reject) => {
-            exec(command, (error, stdout, stderr) => {
-              if (error) {
-                console.error(`❌ [${module}] Error for ${lang} (attempt ${retryCount + 1}): ${error.message}`);
-                return reject(error);
-              }
-              resolve();
-            });
-          });
-
-          // Check if output file exists and is valid
-          if (fs.existsSync(outputPath)) {
-            const fileData = fs.readFileSync(outputPath, "utf8");
-            try {
-              const parsedData = JSON.parse(fileData);
-              result[lang] = parsedData;
-              translated = true;
-              console.log(`✅ [${module}] Translated ${lang} successfully on attempt ${retryCount + 1}`);
-            } catch (parseError) {
-              console.error(`❌ [${module}] Invalid JSON for ${lang}: ${parseError.message}`);
-            }
-          } else {
-            console.error(`❌ [${module}] No output file for ${lang}`);
-          }
-        } catch (error) {
-          console.error(`❌ [${module}] Command failed for ${lang}: ${error.message}`);
+        if (fs.existsSync(outputPath)) {
+          const fileData = fs.readFileSync(outputPath, "utf8");
+          result[lang] = JSON.parse(fileData);
         }
+      });
 
-        if (!translated) {
-          retryCount++;
-          currentModule = (currentModule + 1) % translationModules.length; // Cycle through modules
-          // Clean up output file if it exists
-          if (fs.existsSync(outputPath)) {
-            fs.unlinkSync(outputPath);
-          }
-        }
-      }
+      res.json({
+        message: "✅ Command executed successfully and files created.",
+        output: result,
+      });
 
-      if (!translated) {
-        console.warn(`⚠️ Failed to translate ${lang} after ${maxRetries} attempts`);
-        result[lang] = data; // Fallback to original text
-      }
-    }
-
-    // Prepare response
-    res.json({
-      message: "Translation completed successfully",
-      output: result,
+      // Cleanup
+      fs.rmSync(tempDir, { recursive: true, force: true });
     });
 
   } catch (error) {
     console.error("Translation error:", error);
     res.status(500).json({ error: "Translation failed", details: error.message });
 
-  } finally {
-    // Cleanup
+    // Cleanup on error
     if (fs.existsSync(tempDir)) {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
@@ -110,11 +67,11 @@ app.post("/translate-multiple", async (req, res) => {
 });
 
 app.listen(port, () => {
-  console.log(`Server running at http://localhost:${port}`);
+  console.log(`✅ Server running at http://localhost:${port}`);
 });
 
 
-// 0ld below ******************
+// 0ld below
 
 // const express = require("express");
 // const bodyParser = require("body-parser");
