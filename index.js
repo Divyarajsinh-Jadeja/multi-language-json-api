@@ -3,34 +3,89 @@ const bodyParser = require("body-parser");
 const translator = require("@parvineyvazov/json-translator");
 
 const app = express();
-const port = 3000;
+const port = process.env.PORT || 3000; // Render.com compatibility
 
 app.use(bodyParser.json());
 
-app.post("/translate-multiple", async (req, res) => {
-  const { data, toLanguages, from = "auto" } = req.body;
+// List of translation modules to try in order of preference
+const TRANSLATION_MODULES = [
+  "google2", // Primary module (fast and free)
+  "libre",   // Fallback 1 (free, reliable)
+  "bing",    // Fallback 2 (free, alternative)
+];
 
+app.post("/translate-multiple", async (req, res) => {
+  const { data, toLanguages, from = "auto", concurrencylimit = 3 } = req.body;
+
+  // Validate input
   if (!data || !Array.isArray(toLanguages) || toLanguages.length === 0) {
-    return res.status(400).json({ error: "Provide 'data' and 'toLanguages' array (ISO codes)." });
+    return res.status(400).json({
+      error: "Provide 'data' (JSON object) and 'toLanguages' array (ISO codes).",
+    });
   }
 
   try {
-    // Directly translate the object using the package's API
-    const translations = await translator.translateObject(data, from, toLanguages);
+    // Function to attempt translation with a specific module
+    const tryTranslate = async (module) => {
+      try {
+        const translations = await translator.translateObject(data, from, toLanguages, {
+          module,
+          concurrencyLimit: concurrencylimit,
+        });
 
-    // Map translations to their respective language codes
+        // Check for failed translations (e.g., "--")
+        let hasFailed = false;
+        translations.forEach((translation) => {
+          if (JSON.stringify(translation).includes("--")) {
+            hasFailed = true;
+          }
+        });
+
+        return { success: !hasFailed, translations, module };
+      } catch (error) {
+        console.warn(`Module ${module} failed: ${error.message}`);
+        return { success: false, translations: null, module };
+      }
+    };
+
+    let resultTranslations = null;
+    let usedModule = null;
+
+    // Try each module in sequence until one succeeds
+    for (const module of TRANSLATION_MODULES) {
+      const attempt = await tryTranslate(module);
+      if (attempt.success) {
+        resultTranslations = attempt.translations;
+        usedModule = module;
+        break;
+      }
+    }
+
+    // If no module succeeded, return an error
+    if (!resultTranslations) {
+      return res.status(500).json({
+        error: "All translation modules failed.",
+        details: "Tried modules: " + TRANSLATION_MODULES.join(", "),
+      });
+    }
+
+    // Map translations to language codes
     const result = {};
     toLanguages.forEach((lang, index) => {
-      result[lang] = translations[index];
+      result[lang] = resultTranslations[index];
     });
 
+    // Success response with info about the module used
     res.json({
-      message: "✅ Translations completed successfully.",
+      message: `✅ Translations completed using ${usedModule} module.`,
       output: result,
     });
   } catch (error) {
     console.error("Translation error:", error);
-    res.status(500).json({ error: "Translation failed", details: error.message });
+    res.status(500).json({
+      error: "Translation failed",
+      details: error.message,
+    });
   }
 });
 
