@@ -1,172 +1,74 @@
 const express = require("express");
 const bodyParser = require("body-parser");
 const translator = require("@parvineyvazov/json-translator");
+const { exec } = require("child_process");
+const fs = require("fs");
+const path = require("path");
+const { v4: uuidv4 } = require("uuid");
 
-const app = express();
-const port = process.env.PORT || 3000; // Render.com compatibility
+const app = express();  
+const port = 3000;
 
 app.use(bodyParser.json());
 
-// List of translation modules to try in order of preference
-const TRANSLATION_MODULES = [
-  "google2", // Primary module (fast and free)
-  "libre",   // Fallback 1 (free, reliable)
-  "bing",    // Fallback 2 (free, alternative)
-];
-
 app.post("/translate-multiple", async (req, res) => {
-  const { data, toLanguages, from = "auto", concurrencylimit = 3 } = req.body;
+  const { data, toLanguages } = req.body;
 
-  // Validate input
   if (!data || !Array.isArray(toLanguages) || toLanguages.length === 0) {
-    return res.status(400).json({
-      error: "Provide 'data' (JSON object) and 'toLanguages' array (ISO codes).",
-    });
+    return res.status(400).json({ error: "Provide 'data' and 'toLanguages' array (ISO codes)." });
   }
 
+  const id = uuidv4(); // unique ID for this request
+  const tempDir = path.join("/tmp", `translate-${id}`);
+  fs.mkdirSync(tempDir);
+
   try {
-    // Function to attempt translation with a specific module
-    const tryTranslate = async (module) => {
-      try {
-        const translations = await translator.translateObject(data, from, toLanguages, {
-          module,
-          concurrencyLimit: concurrencylimit,
-        });
+    const inputFilePath = path.join(tempDir, "input.json");
+    fs.writeFileSync(inputFilePath, JSON.stringify(data, null, 2));
 
-        // Check for failed translations (e.g., "--")
-        let hasFailed = false;
-        translations.forEach((translation) => {
-          if (JSON.stringify(translation).includes("--")) {
-            hasFailed = true;
-          }
-        });
+    const from = req.body.from || 'auto';
+    const name = `myApp-${id}`; // unique name for output files
+    const concurrencylimit = req.body.concurrencylimit || 3;
+    const command = `cd ${tempDir} && jsontt input.json --module google2 -f ${from} --to ${toLanguages.join(' ')} --name ${name} --fallback no --concurrencylimit ${concurrencylimit}`;
 
-        return { success: !hasFailed, translations, module };
-      } catch (error) {
-        console.warn(`Module ${module} failed: ${error.message}`);
-        return { success: false, translations: null, module };
+    exec(command, (error, stdout, stderr) => {
+      if (error) {
+        console.error(`❌ exec error: ${error}`);
+        return res.status(500).json({ error: "Command execution failed", details: error.message });
       }
-    };
 
-    let resultTranslations = null;
-    let usedModule = null;
-
-    // Try each module in sequence until one succeeds
-    for (const module of TRANSLATION_MODULES) {
-      const attempt = await tryTranslate(module);
-      if (attempt.success) {
-        resultTranslations = attempt.translations;
-        usedModule = module;
-        break;
-      }
-    }
-
-    // If no module succeeded, return an error
-    if (!resultTranslations) {
-      return res.status(500).json({
-        error: "All translation modules failed.",
-        details: "Tried modules: " + TRANSLATION_MODULES.join(", "),
+      const result = {};
+      toLanguages.forEach((lang) => {
+        const outputPath = path.join(tempDir, `${name}.${lang}.json`);
+        if (fs.existsSync(outputPath)) {
+          const fileData = fs.readFileSync(outputPath, "utf8");
+          result[lang] = JSON.parse(fileData);
+        }
       });
-    }
 
-    // Map translations to language codes
-    const result = {};
-    toLanguages.forEach((lang, index) => {
-      result[lang] = resultTranslations[index];
+      res.json({
+        message: "✅ Command executed successfully and files created.",
+        output: result,
+      });
+
+      // Cleanup
+      fs.rmSync(tempDir, { recursive: true, force: true });
     });
 
-    // Success response with info about the module used
-    res.json({
-      message: `✅ Translations completed using ${usedModule} module.`,
-      output: result,
-    });
   } catch (error) {
     console.error("Translation error:", error);
-    res.status(500).json({
-      error: "Translation failed",
-      details: error.message,
-    });
+    res.status(500).json({ error: "Translation failed", details: error.message });
+
+    // Cleanup on error
+    if (fs.existsSync(tempDir)) {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
   }
 });
 
 app.listen(port, () => {
   console.log(`✅ Server running at http://localhost:${port}`);
 });
-
-
-// Tomorrow  Code Below
-
-// const express = require("express");
-// const bodyParser = require("body-parser");
-// const translator = require("@parvineyvazov/json-translator");
-// const { exec } = require("child_process");
-// const fs = require("fs");
-// const path = require("path");
-// const { v4: uuidv4 } = require("uuid");
-
-// const app = express();  
-// const port = 3000;
-
-// app.use(bodyParser.json());
-
-// app.post("/translate-multiple", async (req, res) => {
-//   const { data, toLanguages } = req.body;
-
-//   if (!data || !Array.isArray(toLanguages) || toLanguages.length === 0) {
-//     return res.status(400).json({ error: "Provide 'data' and 'toLanguages' array (ISO codes)." });
-//   }
-
-//   const id = uuidv4(); // unique ID for this request
-//   const tempDir = path.join("/tmp", `translate-${id}`);
-//   fs.mkdirSync(tempDir);
-
-//   try {
-//     const inputFilePath = path.join(tempDir, "input.json");
-//     fs.writeFileSync(inputFilePath, JSON.stringify(data, null, 2));
-
-//     const from = req.body.from || 'auto';
-//     const name = `myApp-${id}`; // unique name for output files
-//     const concurrencylimit = req.body.concurrencylimit || 3;
-//     const command = `cd ${tempDir} && jsontt input.json --module google2 -f ${from} --to ${toLanguages.join(' ')} --name ${name} --fallback no --concurrencylimit ${concurrencylimit}`;
-
-//     exec(command, (error, stdout, stderr) => {
-//       if (error) {
-//         console.error(`❌ exec error: ${error}`);
-//         return res.status(500).json({ error: "Command execution failed", details: error.message });
-//       }
-
-//       const result = {};
-//       toLanguages.forEach((lang) => {
-//         const outputPath = path.join(tempDir, `${name}.${lang}.json`);
-//         if (fs.existsSync(outputPath)) {
-//           const fileData = fs.readFileSync(outputPath, "utf8");
-//           result[lang] = JSON.parse(fileData);
-//         }
-//       });
-
-//       res.json({
-//         message: "✅ Command executed successfully and files created.",
-//         output: result,
-//       });
-
-//       // Cleanup
-//       fs.rmSync(tempDir, { recursive: true, force: true });
-//     });
-
-//   } catch (error) {
-//     console.error("Translation error:", error);
-//     res.status(500).json({ error: "Translation failed", details: error.message });
-
-//     // Cleanup on error
-//     if (fs.existsSync(tempDir)) {
-//       fs.rmSync(tempDir, { recursive: true, force: true });
-//     }
-//   }
-// });
-
-// app.listen(port, () => {
-//   console.log(`✅ Server running at http://localhost:${port}`);
-// });
 
 
 // 0ld below ******************
