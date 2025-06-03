@@ -32,7 +32,7 @@ app.post("/translate-multiple", async (req, res) => {
     const from = req.body.from || 'auto';
     const name = `myApp-${id}`;
     const concurrencylimit = req.body.concurrencylimit || 3;
-    const command = `cd ${tempDir} && jsontt input.json --module google2 -f ${from} --to ${toLanguages.join(' ')} --name ${name} --fallback no --concurrencylimit ${concurrencylimit}`;
+    const command = `cd ${tempDir} && jsontt input.json --module google2 -f ${from} --to ${toLanguages.join(' ')} --name ${name} --fallback yes --concurrencylimit ${concurrencylimit}`;
     
     console.log(`🚀 Executing translation command:\n${command}`);
 
