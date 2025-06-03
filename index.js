@@ -1,7 +1,8 @@
 const express = require("express");
 const bodyParser = require("body-parser");
+const { v4: uuidv4 } = require("uuid");
 const translator = require("@parvineyvazov/json-translator");
-const { default_concurrency_limit, default_fallback } = require("@parvineyvazov/json-translator");
+const { default_concurrency_limit, default_fallback } = require("@parvineyevazov/json-translator");
 
 const app = express();
 const port = 3000;
@@ -10,155 +11,73 @@ app.use(bodyParser.json());
 
 app.post("/translate-multiple", async (req, res) => {
     const { data, toLanguages } = req.body;
-    const from = req.body.from || 'auto';
-    
-    console.log("🔄 Translation request received");
-    console.log(`📊 Request details: from=${from}, toLanguages=${JSON.stringify(toLanguages)}, data keys count=${Object.keys(data || {}).length}`);
 
-    // Input validation
     if (!data || !Array.isArray(toLanguages) || toLanguages.length === 0) {
-        console.warn("⚠️  Validation failed: Invalid input parameters");
-        console.warn(`   - data: ${data ? 'provided' : 'missing'}`);
-        console.warn(`   - toLanguages: ${Array.isArray(toLanguages) ? `array with ${toLanguages.length} items` : 'not an array or missing'}`);
-        return res.status(400).json({
-            error: "Provide 'data' and 'toLanguages' array (ISO codes)."
-        });
+        console.warn("⚠️  Invalid input: 'data' or 'toLanguages' is missing or malformed.");
+        return res.status(400).json({ error: "Provide 'data' and 'toLanguages' array (ISO codes)." });
     }
 
-    if (typeof data !== 'object') {
-        console.warn("⚠️  Validation failed: 'data' must be an object");
-        return res.status(400).json({
-            error: "'data' must be an object with key-value pairs."
-        });
-    }
-
-    console.log("✅ Input validation passed");
+    const from = req.body.from || 'auto';
+    const requestId = uuidv4();
+    console.log(`🆕 New translation request received: ${requestId}`);
+    console.log(`📦 Source language: ${from}`);
+    console.log(`🌍 Target languages: ${toLanguages.join(', ')}`);
+    console.log(`📄 Keys to translate: ${Object.keys(data).length}`);
 
     try {
         const result = {};
-        const totalLanguages = toLanguages.length;
-        const totalKeys = Object.keys(data).length;
-        
-        console.log(`🚀 Starting translation process for ${totalLanguages} language(s) and ${totalKeys} key(s)`);
 
-        for (let i = 0; i < toLanguages.length; i++) {
-            const toLanguage = toLanguages[i];
-            console.log(`\n🌍 Processing language ${i + 1}/${totalLanguages}: ${toLanguage}`);
-            
+        for (const toLanguage of toLanguages) {
+            console.log(`\n🔁 Translating to: ${toLanguage}`);
             const translatedData = {};
-            let translatedCount = 0;
-            let skippedCount = 0;
-            let errorCount = 0;
 
             for (const key in data) {
                 if (data.hasOwnProperty(key)) {
                     const value = data[key];
-                    
+
                     if (typeof value === 'string') {
-                        console.log(`   🔤 Translating key: "${key}" (${translatedCount + 1}/${totalKeys})`);
-                        
-                        try {
-                            const translatedValue = await translator.translateWord(value, from, toLanguage, {
-                                moduleKey: 'google2',
-                                TranslationModule: translator.TranslationModules['google2'],
-                                concurrencyLimit: default_concurrency_limit,
-                                fallback: default_fallback,
+                        console.log(`📝 Translating key: "${key}" => "${value}"`);
+
+                        translatedData[key] = await translator.translateWord(value, from, toLanguage, {
+                            moduleKey: 'google2',
+                            TranslationModule: translator.TranslationModules['google2'],
+                            concurrencyLimit: default_concurrency_limit,
+                            fallback: default_fallback,
+                        })
+                            .then(translatedValue => {
+                                console.log(`✅ Translated [${key}] to [${toLanguage}]: "${translatedValue}"`);
+                                return translatedValue;
+                            })
+                            .catch(error => {
+                                console.error(`❌ Error translating key "${key}" to "${toLanguage}":`, error.message);
+                                return value; // Fallback to original value on error
                             });
-                            
-                            translatedData[key] = translatedValue;
-                            translatedCount++;
-                            console.log(`   ✅ Successfully translated "${key}"`);
-                            
-                        } catch (error) {
-                            console.error(`   ❌ Failed to translate key "${key}":`, error.message);
-                            translatedData[key] = value; // Fallback to original value
-                            errorCount++;
-                        }
                     } else {
-                        translatedData[key] = value; // Non-string values are copied as is
-                        skippedCount++;
-                        console.log(`   ⏭️  Skipped non-string key: "${key}" (type: ${typeof value})`);
+                        console.log(`⏭️ Skipping non-string key: "${key}"`);
+                        translatedData[key] = value;
                     }
                 }
             }
 
             result[toLanguage] = translatedData;
-            
-            console.log(`📈 Language ${toLanguage} summary:`);
-            console.log(`   - Translated: ${translatedCount} keys`);
-            console.log(`   - Skipped: ${skippedCount} keys (non-string values)`);
-            console.log(`   - Errors: ${errorCount} keys (fallback to original)`);
         }
 
-        console.log("\n🎉 Translation process completed successfully");
-        console.log(`📋 Final summary:`);
-        console.log(`   - Languages processed: ${totalLanguages}`);
-        console.log(`   - Total keys per language: ${totalKeys}`);
-        console.log(`   - Response size: ${JSON.stringify(result).length} characters`);
-
+        console.log("✅ All translations completed successfully.");
         res.json({
-            message: "✅ Translation completed successfully",
+            message: "✅ Translation completed.",
             output: result,
-            summary: {
-                languagesProcessed: totalLanguages,
-                keysPerLanguage: totalKeys,
-                timestamp: new Date().toISOString()
-            }
         });
 
     } catch (error) {
-        console.error("❌ Critical translation error:", error.message);
-        console.error("🔍 Error stack:", error.stack);
-        
-        res.status(500).json({
-            error: "Translation failed",
-            details: error.message,
-            timestamp: new Date().toISOString()
-        });
+        console.error("❌ Translation error:", error.message);
+        res.status(500).json({ error: "Translation failed", details: error.message });
     }
 });
 
-// Health check endpoint
-app.get("/health", (req, res) => {
-    console.log("🏥 Health check requested");
-    res.json({
-        status: "healthy",
-        timestamp: new Date().toISOString(),
-        uptime: process.uptime()
-    });
-});
-
-// Handle 404 for unknown routes
-app.use("*", (req, res) => {
-    console.warn(`⚠️  404 - Route not found: ${req.method} ${req.originalUrl}`);
-    res.status(404).json({
-        error: "Route not found",
-        availableRoutes: [
-            "POST /translate-multiple",
-            "GET /health"
-        ]
-    });
-});
-
-// Global error handler
-app.use((error, req, res, next) => {
-    console.error("💥 Unhandled server error:", error.message);
-    console.error("🔍 Error stack:", error.stack);
-    
-    res.status(500).json({
-        error: "Internal server error",
-        timestamp: new Date().toISOString()
-    });
-});
-
 app.listen(port, () => {
-    console.log(`🚀 Translation server started successfully`);
-    console.log(`📍 Server running at http://localhost:${port}`);
-    console.log(`📋 Available endpoints:`);
-    console.log(`   - POST /translate-multiple - Translate JSON data to multiple languages`);
-    console.log(`   - GET /health - Health check`);
-    console.log(`⏰ Server started at: ${new Date().toISOString()}`);
+    console.log(`✅ Server running at http://localhost:${port}`);
 });
+
 
 /// My Code
 
