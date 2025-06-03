@@ -13,124 +13,73 @@ const port = 3000;
 app.use(bodyParser.json());
 
 app.post("/translate-multiple", async (req, res) => {
-    const {data, toLanguages} = req.body;
+  const { data, toLanguages } = req.body;
 
-    if (!data || !Array.isArray(toLanguages) || toLanguages.length === 0) {
-        console.warn("⚠️  Invalid input: 'data' or 'toLanguages' is missing or malformed.");
-        return res.status(400).json({error: "Provide 'data' and 'toLanguages' array (ISO codes)."});
-    }
+  if (!data || !Array.isArray(toLanguages) || toLanguages.length === 0) {
+      console.warn("⚠️  Invalid input: 'data' or 'toLanguages' is missing or malformed.");
+      return res.status(400).json({
+          error: "Provide 'data' and 'toLanguages' array (ISO codes)."
+      });
+  }
 
-    // const id = uuidv4();
-    // const tempDir = path.join("/tmp", translate-${id});
-    // fs.mkdirSync(tempDir);
-    // console.log(📁 Temporary directory created: ${tempDir});
+  try {
+      const from = req.body.from || 'auto';
+      const result = {};
 
-    try {
-        // const inputFilePath = path.join(tempDir, "input.json");
-        // fs.writeFileSync(inputFilePath, JSON.stringify(data, null, 2));
-        // console.log(📄 Input JSON file created at: ${inputFilePath});
+      console.log(`🆕 Received translation request`);
+      console.log(`📦 Source language: ${from}`);
+      console.log(`🌍 Target languages: ${toLanguages.join(', ')}`);
+      console.log(`📄 Keys to translate: ${Object.keys(data).length}`);
 
-        const from = req.body.from || 'auto';
-        // const name = myApp-${id};
-        // const concurrencylimit = req.body.concurrencylimit || 3;
-        // const fallback = req.body.fallback || false;
-        // const command = cd ${tempDir} && jsontt input.json --module google2 -f ${from} --to ${toLanguages.join(' ')} --name ${name} --fallback ${fallback === true ? 'yes' : 'no'} --concurrencylimit ${concurrencylimit};
+      for (const toLanguage of toLanguages) {
+          const translatedData = {};
+          console.log(`\n🔁 Translating to: ${toLanguage}`);
 
-        // console.log(🚀 Executing translation command:\n${command});
-        // let translatedStr = await translateWithGoogleByProxySupport(str, from, toLanguages[0]);
+          for (const key in data) {
+              if (data.hasOwnProperty(key)) {
+                  const value = data[key];
 
-        const  result = {};
+                  if (typeof value === 'string') {
+                      console.log(`📝 Translating key: "${key}" => "${value}"`);
 
-        for (const toLanguage of toLanguages) {
-            const translatedData = {};
+                      translatedData[key] = await translator.translateWord(value, from, toLanguage, {
+                          moduleKey: 'google2',
+                          TranslationModule: translator.TranslationModules['google2'],
+                          concurrencyLimit: default_concurrency_limit,
+                          fallback: default_fallback,
+                      })
+                      .then(translatedValue => {
+                          console.log(`✅ [${toLanguage}] ${key}: "${value}" → "${translatedValue}"`);
+                          return translatedValue;
+                      })
+                      .catch(error => {
+                          console.error(`❌ Error translating key "${key}" to "${toLanguage}":`, error.message);
+                          return value; // Fallback to original value
+                      });
+                  } else {
+                      console.log(`⏭️ Skipping non-string key: "${key}"`);
+                      translatedData[key] = value;
+                  }
+              }
+          }
 
-            for (const key in data) {
-                if (data.hasOwnProperty(key)) {
-                    const value = data[key];
-                    if (typeof value === 'string') {
-                        translatedData[key] = await translator.translateWord(value, from, toLanguage, {
-                            moduleKey: 'google2',
-                            TranslationModule: translator.TranslationModules['google2'],
-                            concurrencyLimit: default_concurrency_limit,
-                            fallback: default_fallback,
-                        })
-                            .then(translatedValue => {
-                                return translatedValue;
-                            })
-                            .catch(error => {
-                                console.error('❌ Error translating key "${key}":, error');
-                                return value; // Fallback to original value on error
-                            });
-                    } else {
-                        translatedData[key] = value; // Non-string values are copied as is
-                    }
-                }
-            }
+          result[toLanguage] = translatedData;
+      }
 
-            result[toLanguage] = translatedData;
+      console.log("✅ All translations completed successfully.");
 
+      res.json({
+          message: "✅ Command executed successfully and files created.",
+          output: result,
+      });
 
-        }
-        res.json({
-            message: "✅ Command executed successfully and files created.", output: result,
-        });
-
-        /*exec(command, (error, stdout, stderr) => {
-            if (error) {
-                console.error(❌ Command execution error: ${error.message});
-                return res.status(500).json({error: "Command execution failed", details: error.message});
-            }
-
-            console.log("✅ Translation command executed successfully.");
-            console.log(📤 stdout:\n${stdout});
-            if (stderr) console.warn(⚠️ stderr:\n${stderr});
-
-            const result = {};
-            toLanguages.forEach((lang) => {
-                const outputPath = path.join(tempDir, ${name}.${lang}.json);
-                if (fs.existsSync(outputPath)) {
-                    const fileData = fs.readFileSync(outputPath, "utf8");
-                    const languageData = JSON.parse(fileData);
-                    // Here check if any value in the languageData is "--" or not. if yes then throw error
-                    if (Object.values(languageData).some(value => value === "--")) {
-                        console.error(❌ Translation for language ${lang} contains placeholder values ("--").);
-                        // replace "--" with original data, also check nested objects
-                        for (const key in languageData) {
-                            if (typeof languageData[key] === 'object' && languageData[key] !== null) {
-                                for (const subKey in languageData[key]) {
-                                    if (languageData[key][subKey] === "--") {
-                                        languageData[key][subKey] = data[key][subKey];
-                                    }
-                                }
-                            } else if (languageData[key] === "--") {
-                                languageData[key] = data[key];
-                            }
-                        }
-                    }
-                    result[lang] = languageData;
-                    console.log(📄 Output for ${lang} loaded from ${outputPath});
-                } else {
-                    console.warn(⚠️ Output file not found for language: ${lang});
-                }
-            });
-
-            res.json({
-                message: "✅ Command executed successfully and files created.", output: result,
-            });
-
-            fs.rmSync(tempDir, {recursive: true, force: true});
-            console.log(🧹 Temporary directory cleaned up: ${tempDir});
-        });*/
-
-    } catch (error) {
-        console.error("❌ Translation error:", error);
-        res.status(500).json({error: "Translation failed", details: error.message});
-
-        // if (fs.existsSync(tempDir)) {
-        //     fs.rmSync(tempDir, {recursive: true, force: true});
-        //     console.log(🧹 Temporary directory cleaned up after error: ${tempDir});
-        // }
-    }
+  } catch (error) {
+      console.error("❌ Translation error:", error.message);
+      res.status(500).json({
+          error: "Translation failed",
+          details: error.message
+      });
+  }
 });
 
 
