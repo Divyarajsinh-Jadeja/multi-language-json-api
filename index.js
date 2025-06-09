@@ -1,3 +1,23 @@
+const express = require("express");
+const bodyParser = require("body-parser");
+const { exec } = require("child_process");
+const fs = require("fs");
+const path = require("path");
+const { v4: uuidv4 } = require("uuid");
+const translator = require("@parvineyvazov/json-translator");
+const {
+  TranslationConfig: TranslationConfigTemp,
+  default_concurrency_limit,
+  default_fallback,
+  TranslationModulesTemp
+} = require("@parvineyevazov/json-translator");
+
+const app = express(); // ✅ This must come before app.post()
+
+const port = 3000;
+
+app.use(bodyParser.json());
+
 app.post("/translate-multiple", async (req, res) => {
     const { data, toLanguages } = req.body;
   
