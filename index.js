@@ -13,7 +13,45 @@ const port = 3000;
 app.use(bodyParser.json());
 
 // Increased concurrency limit for faster processing
-const FAST_CONCURRENCY_LIMIT = 10;
+const FAST_CONCURRENCY_LIMIT = 5; // Reduced to avoid rate limiting
+const MAX_RETRIES = 3;
+const RETRY_DELAY = 1000; // 1 second delay between retries
+
+// Helper function to retry translation
+async function translateWithRetry(text, from, to, retries = MAX_RETRIES) {
+    for (let attempt = 1; attempt <= retries; attempt++) {
+        try {
+            const result = await translator.translateWord(text.trim(), from, to, {
+                moduleKey: 'google2',
+                TranslationModule: translator.TranslationModules['google2'],
+                concurrencyLimit: FAST_CONCURRENCY_LIMIT,
+                fallback: default_fallback,
+            });
+            
+            // Validate translation result
+            if (result && result.trim() && result !== '--' && result.toLowerCase() !== 'error') {
+                return { success: true, translation: result.trim() };
+            }
+            
+            console.log(`⚠️ Invalid translation result on attempt ${attempt}: "${result}"`);
+            
+            if (attempt < retries) {
+                console.log(`🔄 Retrying in ${RETRY_DELAY}ms...`);
+                await new Promise(resolve => setTimeout(resolve, RETRY_DELAY));
+            }
+            
+        } catch (error) {
+            console.error(`❌ Translation attempt ${attempt} failed:`, error.message);
+            
+            if (attempt < retries) {
+                console.log(`🔄 Retrying in ${RETRY_DELAY}ms...`);
+                await new Promise(resolve => setTimeout(resolve, RETRY_DELAY));
+            }
+        }
+    }
+    
+    return { success: false, translation: null };
+}
 
 app.post("/translate-multiple", async (req, res) => {
     const { data, toLanguages } = req.body;
@@ -33,9 +71,17 @@ app.post("/translate-multiple", async (req, res) => {
         console.log(`🌍 Target languages: ${toLanguages.join(', ')}`);
         console.log(`📄 Keys to translate: ${Object.keys(data).length}`);
         
-        // Get all string values that need translation
-        const stringEntries = Object.entries(data).filter(([key, value]) => typeof value === 'string');
-        const nonStringEntries = Object.entries(data).filter(([key, value]) => typeof value !== 'string');
+        // Get all string values that need translation (filter out empty/invalid strings)
+        const stringEntries = Object.entries(data).filter(([key, value]) => 
+            typeof value === 'string' && 
+            value.trim().length > 0 && 
+            value.trim() !== '--'
+        );
+        const nonStringEntries = Object.entries(data).filter(([key, value]) => 
+            typeof value !== 'string' || 
+            value.trim().length === 0 || 
+            value.trim() === '--'
+        );
         
         console.log(`📝 String keys to translate: ${stringEntries.length}`);
         console.log(`⏭️ Non-string keys to copy: ${nonStringEntries.length}`);
@@ -46,30 +92,14 @@ app.post("/translate-multiple", async (req, res) => {
         for (const toLanguage of toLanguages) {
             for (const [key, value] of stringEntries) {
                 translationPromises.push(
-                    translator.translateWord(value, from, toLanguage, {
-                        moduleKey: 'google2',
-                        TranslationModule: translator.TranslationModules['google2'],
-                        concurrencyLimit: FAST_CONCURRENCY_LIMIT,
-                        fallback: default_fallback,
-                    })
-                    .then(translatedValue => ({
+                    translateWithRetry(value, from, toLanguage)
+                    .then(result => ({
                         toLanguage,
                         key,
                         originalValue: value,
-                        translatedValue,
-                        success: true
+                        translatedValue: result.translation,
+                        success: result.success
                     }))
-                    .catch(error => {
-                        console.error(`❌ Error translating "${key}" to "${toLanguage}":`, error.message);
-                        return {
-                            toLanguage,
-                            key,
-                            originalValue: value,
-                            translatedValue: value, // Fallback to original
-                            success: false,
-                            error: error.message
-                        };
-                    })
                 );
             }
         }
@@ -96,23 +126,50 @@ app.post("/translate-multiple", async (req, res) => {
             }
         }
         
-        // Add translated values
+        // Add translated values and check for failures
+        let successfulTranslations = 0;
+        let failedTranslations = 0;
+        const failedItems = [];
+        
         for (const translationResult of translationResults) {
-            const { toLanguage, key, translatedValue, success } = translationResult;
-            result[toLanguage][key] = translatedValue;
+            const { toLanguage, key, translatedValue, success, originalValue } = translationResult;
             
-            if (success) {
-                console.log(`✅ [${toLanguage}] ${key}: "${translationResult.originalValue}" → "${translatedValue}"`);
+            if (success && translatedValue) {
+                result[toLanguage][key] = translatedValue;
+                console.log(`✅ [${toLanguage}] ${key}: "${originalValue}" → "${translatedValue}"`);
+                successfulTranslations++;
+            } else {
+                failedTranslations++;
+                failedItems.push({ key, originalValue, toLanguage });
+                console.error(`❌ [${toLanguage}] Failed to translate "${key}": "${originalValue}"`);
             }
         }
         
-        console.log("✅ All translations completed successfully.");
+        // If any translations failed, return error
+        if (failedTranslations > 0) {
+            console.error(`❌ ${failedTranslations} translations failed. Returning error.`);
+            return res.status(500).json({
+                error: "Some translations failed",
+                message: `${failedTranslations} out of ${translationPromises.length} translations failed`,
+                failedItems: failedItems,
+                stats: {
+                    totalTranslations: translationPromises.length,
+                    successfulTranslations,
+                    failedTranslations,
+                    processingTimeMs: endTime - startTime
+                }
+            });
+        }
+        
+        console.log(`✅ All ${successfulTranslations} translations completed successfully!`);
         
         res.json({
-            message: "✅ Command executed successfully and files created.",
+            message: "✅ All translations completed successfully",
             output: result,
             stats: {
                 totalTranslations: translationPromises.length,
+                successfulTranslations,
+                failedTranslations: 0,
                 processingTimeMs: endTime - startTime,
                 languages: toLanguages.length,
                 keys: Object.keys(data).length
