@@ -5,86 +5,131 @@ const fs = require("fs");
 const path = require("path");
 const {v4: uuidv4} = require("uuid");
 const translator = require("@parvineyvazov/json-translator");
-const {TranslationConfig: TranslationConfigTemp,default_concurrency_limit, default_fallback, TranslationModulesTemp} = require("@parvineyvazov/json-translator");
+const {TranslationConfig: TranslationConfigTemp, default_concurrency_limit, default_fallback, TranslationModulesTemp} = require("@parvineyvazov/json-translator");
 
 const app = express();
 const port = 3000;
 
 app.use(bodyParser.json());
 
+// Increased concurrency limit for faster processing
+const FAST_CONCURRENCY_LIMIT = 10;
+
 app.post("/translate-multiple", async (req, res) => {
-  const { data, toLanguages } = req.body;
-
-  if (!data || !Array.isArray(toLanguages) || toLanguages.length === 0) {
-      console.warn("⚠️  Invalid input: 'data' or 'toLanguages' is missing or malformed.");
-      return res.status(400).json({
-          error: "Provide 'data' and 'toLanguages' array (ISO codes)."
-      });
-  }
-
-  try {
-      const from = req.body.from || 'auto';
-      const result = {};
-
-      console.log(`🆕 Received translation request`);
-      console.log(`📦 Source language: ${from}`);
-      console.log(`🌍 Target languages: ${toLanguages.join(', ')}`);
-      console.log(`📄 Keys to translate: ${Object.keys(data).length}`);
-
-      for (const toLanguage of toLanguages) {
-          const translatedData = {};
-          console.log(`\n🔁 Translating to: ${toLanguage}`);
-
-          for (const key in data) {
-              if (data.hasOwnProperty(key)) {
-                  const value = data[key];
-
-                  if (typeof value === 'string') {
-                      console.log(`📝 Translating key: "${key}" => "${value}"`);
-
-                      translatedData[key] = await translator.translateWord(value, from, toLanguage, {
-                          moduleKey: 'google2',
-                          TranslationModule: translator.TranslationModules['google2'],
-                          concurrencyLimit: default_concurrency_limit,
-                          fallback: default_fallback,
-                      })
-                      .then(translatedValue => {
-                          console.log(`✅ [${toLanguage}] ${key}: "${value}" → "${translatedValue}"`);
-                          return translatedValue;
-                      })
-                      .catch(error => {
-                          console.error(`❌ Error translating key "${key}" to "${toLanguage}":`, error.message);
-                          return value; // Fallback to original value
-                      });
-                  } else {
-                      console.log(`⏭️ Skipping non-string key: "${key}"`);
-                      translatedData[key] = value;
-                  }
-              }
-          }
-
-          result[toLanguage] = translatedData;
-      }
-
-      console.log("✅ All translations completed successfully.");
-
-      res.json({
-          message: "✅ Command executed successfully and files created.",
-          output: result,
-      });
-
-  } catch (error) {
-      console.error("❌ Translation error:", error.message);
-      res.status(500).json({
-          error: "Translation failed",
-          details: error.message
-      });
-  }
+    const { data, toLanguages } = req.body;
+    
+    if (!data || !Array.isArray(toLanguages) || toLanguages.length === 0) {
+        console.warn("⚠️  Invalid input: 'data' or 'toLanguages' is missing or malformed.");
+        return res.status(400).json({
+            error: "Provide 'data' and 'toLanguages' array (ISO codes)."
+        });
+    }
+    
+    try {
+        const from = req.body.from || 'auto';
+        
+        console.log(`🆕 Received translation request`);
+        console.log(`📦 Source language: ${from}`);
+        console.log(`🌍 Target languages: ${toLanguages.join(', ')}`);
+        console.log(`📄 Keys to translate: ${Object.keys(data).length}`);
+        
+        // Get all string values that need translation
+        const stringEntries = Object.entries(data).filter(([key, value]) => typeof value === 'string');
+        const nonStringEntries = Object.entries(data).filter(([key, value]) => typeof value !== 'string');
+        
+        console.log(`📝 String keys to translate: ${stringEntries.length}`);
+        console.log(`⏭️ Non-string keys to copy: ${nonStringEntries.length}`);
+        
+        // Create all translation promises at once for maximum parallelization
+        const translationPromises = [];
+        
+        for (const toLanguage of toLanguages) {
+            for (const [key, value] of stringEntries) {
+                translationPromises.push(
+                    translator.translateWord(value, from, toLanguage, {
+                        moduleKey: 'google2',
+                        TranslationModule: translator.TranslationModules['google2'],
+                        concurrencyLimit: FAST_CONCURRENCY_LIMIT,
+                        fallback: default_fallback,
+                    })
+                    .then(translatedValue => ({
+                        toLanguage,
+                        key,
+                        originalValue: value,
+                        translatedValue,
+                        success: true
+                    }))
+                    .catch(error => {
+                        console.error(`❌ Error translating "${key}" to "${toLanguage}":`, error.message);
+                        return {
+                            toLanguage,
+                            key,
+                            originalValue: value,
+                            translatedValue: value, // Fallback to original
+                            success: false,
+                            error: error.message
+                        };
+                    })
+                );
+            }
+        }
+        
+        console.log(`🚀 Starting ${translationPromises.length} parallel translations...`);
+        const startTime = Date.now();
+        
+        // Execute all translations in parallel
+        const translationResults = await Promise.all(translationPromises);
+        
+        const endTime = Date.now();
+        console.log(`⚡ All translations completed in ${endTime - startTime}ms`);
+        
+        // Organize results by language
+        const result = {};
+        
+        // Initialize result structure
+        for (const toLanguage of toLanguages) {
+            result[toLanguage] = {};
+            
+            // Add non-string values first
+            for (const [key, value] of nonStringEntries) {
+                result[toLanguage][key] = value;
+            }
+        }
+        
+        // Add translated values
+        for (const translationResult of translationResults) {
+            const { toLanguage, key, translatedValue, success } = translationResult;
+            result[toLanguage][key] = translatedValue;
+            
+            if (success) {
+                console.log(`✅ [${toLanguage}] ${key}: "${translationResult.originalValue}" → "${translatedValue}"`);
+            }
+        }
+        
+        console.log("✅ All translations completed successfully.");
+        
+        res.json({
+            message: "✅ Command executed successfully and files created.",
+            output: result,
+            stats: {
+                totalTranslations: translationPromises.length,
+                processingTimeMs: endTime - startTime,
+                languages: toLanguages.length,
+                keys: Object.keys(data).length
+            }
+        });
+        
+    } catch (error) {
+        console.error("❌ Translation error:", error.message);
+        res.status(500).json({
+            error: "Translation failed",
+            details: error.message
+        });
+    }
 });
 
-
 app.listen(port, () => {
-  console.log(`✅ Server running at http://localhost:${port}`);
+    console.log(`✅ Server running at http://localhost:${port}`);
 });
 
 /// My Code
